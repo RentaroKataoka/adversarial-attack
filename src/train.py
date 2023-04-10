@@ -221,8 +221,8 @@ def main():
             #get sample
             if i % 10 == 0:
                 images_sample = torch.cat((real_A.data, fake_B.data, rec_A.data, real_B.data, fake_A.data, rec_B.data),0)
-                os.makedirs("sample/" + epoch, exist_ok=True)
-                save_image(images_sample, "sample/" + epoch + "/" + str(i + 1) + ".png", nrow=3, normalize=True)
+                os.makedirs("sample/" + str(epoch + 1), exist_ok=True)
+                save_image(images_sample, "sample/" + str(epoch + 1) + "/" + str(i) + ".png", nrow=3, normalize=True)
                 
     
             current_batch = epoch * len(train_weak_loader) + i
