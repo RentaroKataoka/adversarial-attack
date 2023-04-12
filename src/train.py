@@ -20,6 +20,91 @@ import numpy as np
 from memory_profiler import profile
 import pdb 
 from torchvision.datasets import ImageFolder
+import random
+
+def torch_fix_seed(seed=42):
+    # Python random
+    random.seed(seed)
+    # Numpy
+    np.random.seed(seed)
+    # Pytorch
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.use_deterministic_algorithms = True
+torch_fix_seed()
+
+
+pretrained_model = "./model/googlefonts.pth" #事前学習済みMNISTモデル(重みパラメータ)
+use_cuda = True
+
+
+class Net(nn.Module):
+    def __init__(self):
+        super(Net, self).__init__()
+        self.conv1 = nn.Conv2d(1, 32, 3, 1)
+        self.conv2 = nn.Conv2d(32, 64, 3, 1)
+        self.dropout1 = nn.Dropout(0.25)
+        self.dropout2 = nn.Dropout(0.5)
+        self.fc1 = nn.Linear(57600, 128)
+        self.fc2 = nn.Linear(128, 26)
+
+    def forward(self, x):
+        x = self.conv1(x)
+        x = F.relu(x)
+        x = self.conv2(x)
+        x = F.relu(x)
+        x = F.max_pool2d(x, 2)
+        x = self.dropout1(x)
+        x = torch.flatten(x, 1)
+        x = self.fc1(x)
+        x = F.relu(x)
+        x = self.dropout2(x)
+        x = self.fc2(x)
+        output = F.log_softmax(x, dim=1)
+        return output
+
+# 使うデバイス（CPUかGPUか）の定義
+print("CUDA Available: ",torch.cuda.is_available())
+device = torch.device("cuda" if (use_cuda and torch.cuda.is_available()) else "cpu")
+# ネットワークの初期化
+model = Net().to(device)
+print(model)
+# 訓練済みモデルのロード
+model.load_state_dict(torch.load(pretrained_model, map_location='cpu'))
+# モデルを評価モードに設定。本チュートリアルの例では、これはドロップアウト層等を評価モードにするのに必要
+model.eval()
+
+
+
+def attack(data, data_grad, target, dirname_res, dirname_pro, chr, count, epsilon, lim, success):
+    os.makedirs(dirname_pro + chr + "/{}".format(count), exist_ok=True)
+    # os.makedirs(dirname_pro + chr + "/{}".format(i), exist_ok=True)
+    for i in range(1, 10001):
+        data.requires_grad = False
+        sign_data_grad = data_grad.sign()
+        perturbed_data = data + epsilon * sign_data_grad
+        # perturbed_data += (perturbed_data < torch.Tensor([1 - lim]).to("cuda")) * epsilon + (perturbed_data < torch.Tensor([0]).to("cuda")) * -epsilon + (perturbed_data > torch.Tensor([-1 + lim]).to("cuda")) * -epsilon + (perturbed_data > torch.Tensor([0]).to("cuda")) * epsilon
+        perturbed_data = torch.clamp(perturbed_data, -1, 1)
+        data = perturbed_data
+        data.requires_grad = True
+        output = model(data)
+        loss = F.nll_loss(output, target)
+        pred = output.max(1, keepdim=True)[1]
+        # plt.xticks([], [])
+        # plt.yticks([], [])
+        # plt.imsave(dirname_pro + chr + "/{}".format(count) + "/" + "{}.png".format(i), data.squeeze().detach().cpu().numpy(), cmap="gray")
+        if pred.item() != target.item():
+            success += 1
+            break
+        model.zero_grad()
+        loss.backward()
+        data_grad = data.grad.data
+    # os.makedirs(dirname_res + chr + "/{}".format(i), exist_ok=True)
+    # plt.xticks([], [])
+    # plt.yticks([], [])
+    # plt.imsave(dirname_res + chr + "/{}".format(i) + "/" + "{}.png".format(count), data.squeeze().detach().cpu().numpy(), cmap="gray")
+    return data, pred, success, i
 
 
 class loss_scheduler():
@@ -154,8 +239,31 @@ def main():
     for epoch in range(total_epoch):
         start = time.time()
         losses = [0 for i in range(6)]
+
+        chr_lambda = lambda a: chr(a + 65)
+        dirname_grad = "./GAN_result" + "/grad/"
+        dirname_org = "./GAN_result" + "/org/"
+        dirname_adv = "./GAN_result" + "/adv/"
+        dirname_res = "./GAN_result" + "/resistance/"
+        dirname_pro = "./GAN_result" + "/progress/"
+        # for c in [chr(i) for i in range(65, 65+26)]:
+        #     os.makedirs(dirname_grad + c, exist_ok=True)
+        #     os.makedirs(dirname_org + c, exist_ok=True)
+        #     os.makedirs(dirname_adv + c, exist_ok=True)
+        #     os.makedirs(dirname_res + c, exist_ok=True)
+        #     os.makedirs(dirname_pro + c, exist_ok=True)
+        #     for d in [chr(i) for i in range(65, 65+26)]:
+        #         os.makedirs(dirname_adv + c + "/" + c + "→" + d, exist_ok=True)
+
+        # 精度カウンター
+        correct = 0
+        success = 0
+        count_list = [0] * 26
+
         for i, ((real_A, label_A), (real_B, label_B)) in enumerate(zip(train_weak_loader, train_strong_loader)):
             #generate image
+            label_A = label_A.type(torch.LongTensor).to(device)
+            label_B = label_B.type(torch.LongTensor).to(device)
             real_A = real_A.to(device)
             real_B = real_B.to(device)
             fake_A, fake_B = G_B2A(real_B), G_A2B(real_A)
@@ -218,12 +326,90 @@ def main():
             losses[4]+=loss_D_A.item() 
             losses[5]+=loss_D_B.item()
 
-            #get sample
-            if i % 10 == 0:
-                images_sample = torch.cat((real_A.data, fake_B.data, rec_A.data, real_B.data, fake_A.data, rec_B.data),0)
-                os.makedirs("sample/" + str(epoch + 1), exist_ok=True)
-                save_image(images_sample, "sample/" + str(epoch + 1) + "/" + str(i) + ".png", nrow=3, normalize=True)
+            if epoch + 1 >= 5:
+                real_A.requires_grad = True
+                # データをモデルに順伝播させます
+                output_A = model(real_A)
+                init_pred_A = output_A.max(1, keepdim=True)[1] # 最大の確率のインデックスを取得します。
+
+                if init_pred_A.item() == label_A.item():
+                    data_copy_A = real_A.detach().clone()
+                    
+                    count_list[init_pred_A.item()] += 1
                 
+                    # 損失を計算します
+                    loss_A = F.nll_loss(output_A, label_A)
+                    # 既存の勾配を全てゼロにします
+                    model.zero_grad()
+                    # 逆伝播させてモデルの勾配を計算します
+                    loss_A.backward()
+                    # データの勾配を取得します
+                    data_grad_A = real_A.grad.data
+
+                    perturbed_data_A, pred_A, success_A, def_A = attack(real_A, data_grad_A, label_A, dirname_res, dirname_pro, chr_lambda(init_pred_A.item()), count_list[init_pred_A.item()], 0.001, 0, success)
+
+                    final_pred_A = pred_A
+
+                    org_A = data_copy_A.squeeze().detach().cpu().numpy()
+                    adv_A = perturbed_data_A.squeeze().detach().cpu().numpy()
+
+            
+                fake_B = fake_B.detach()
+                fake_B.requires_grad = True
+                # データをモデルに順伝播させます
+                output_B = model(fake_B)
+
+                init_pred_B = output_B.max(1, keepdim=True)[1] # 最大の確率のインデックスを取得します。
+
+                # 最初から予測が間違っている場合、攻撃する必要がないため次のイテレーションに進みます。
+                if init_pred_B.item() == label_A.item():
+                    data_copy_B = fake_B.detach().clone()
+                
+                    # 損失を計算します
+                    loss_B = F.nll_loss(output_B, label_A)
+                    # 既存の勾配を全てゼロにします
+                    model.zero_grad()
+                    # 逆伝播させてモデルの勾配を計算します
+                    loss_B.backward()
+                    # データの勾配を取得します
+                    data_grad_B = fake_B.grad.data
+
+                    perturbed_data_B, pred_B, success_B, def_B = attack(fake_B, data_grad_B, label_A, dirname_res, dirname_pro, chr_lambda(init_pred_B.item()), count_list[init_pred_B.item()], 0.001, 0, success)
+
+                    final_pred = pred_B
+
+                    org_B = data_copy_B.squeeze().detach().cpu().numpy()
+                    adv = perturbed_data_B.squeeze().detach().cpu().numpy()
+
+                # #各条件を満たす画像の保存
+                # plt.xticks([], [])
+                # plt.yticks([], [])
+                # plt.imsave(dirname_org + chr_lambda(init_pred.item()) + "/{}.png".format(count_list[init_pred.item()]), org, cmap="gray")
+                
+                # os.makedirs(dirname_adv + chr_lambda(init_pred.item()) + "/" + chr_lambda(init_pred.item()) + "→" + chr_lambda(final_pred.item()) + "/", exist_ok=True)
+                # plt.xticks([], [])
+                # plt.yticks([], [])
+                # plt.imsave(dirname_adv + chr_lambda(init_pred.item()) + "/" + chr_lambda(init_pred.item()) + "→" + chr_lambda(final_pred.item()) + "/{}.png".format(count_list[init_pred.item()]), adv, cmap="gray")
+
+                os.makedirs("./sample/" + str(epoch + 1), exist_ok=True)
+                if init_pred_A.item() != label_A.item():
+                    def_A = 0
+                if init_pred_B.item() != label_A.item():
+                    def_B = 0
+                real_A = real_A.squeeze().detach().cpu().numpy()
+                plt.subplot(1, 2, 1)
+                plt.xticks([], [])
+                plt.yticks([], [])  
+                plt.title("{}".format(def_A))
+                plt.imshow(real_A, cmap="gray")
+                fake_B = fake_B.squeeze().detach().cpu().numpy()
+                plt.subplot(1, 2, 2)
+                plt.xticks([], [])
+                plt.yticks([], [])
+                plt.title("{}".format(def_B))
+                plt.imshow(fake_B, cmap="gray")
+                plt.savefig("./sample/" + str(epoch + 1) + "/{}.png".format(i))
+                      
     
             current_batch = epoch * len(train_weak_loader) + i
             sys.stdout.write(f"\r[Epoch {epoch+1}/200] [Index {i}/{len(train_weak_loader)}] [D_A loss: {loss_D_A.item():.4f}] [D_B loss: {loss_D_B.item():.4f}] [G loss: adv: {loss_G.item():.4f}] [lr: {scheduler_G.get_lr()}]")
@@ -249,17 +435,15 @@ def main():
         scheduler_D_A.step()
         scheduler_D_B.step()
         
-        if (epoch+1) % args.checkpoint_frequecy == 0:
-            os.makedirs("models/"+"/G_A2B/")
-            os.makedirs("models/"+"/G_B2A/")
-            os.makedirs("models/"+"/D_A/")
-            os.makedirs("models/"+"/D_B/")
-            torch.save(G_A2B.state_dict(), "models/"+"/G_A2B/"+str(epoch)+".pth")
-            torch.save(G_B2A.state_dict(), "models/"+"/G_B2A/"+str(epoch)+".pth")
-            torch.save(D_A.state_dict(), "models/"+"/D_A/"+str(epoch)+".pth")
-            torch.save(D_B.state_dict(), "models/"+"/D_B/"+str(epoch)+".pth")
-
-
+        
+        os.makedirs("models/G_A2B/", exist_ok=True)
+        os.makedirs("models/G_B2A/", exist_ok=True)
+        os.makedirs("models/D_A/", exist_ok=True)
+        os.makedirs("models/D_B/", exist_ok=True)
+        torch.save(G_A2B.state_dict(), "models/G_A2B/"+str(epoch)+".pth")
+        torch.save(G_B2A.state_dict(), "models/G_B2A/"+str(epoch)+".pth")
+        torch.save(D_A.state_dict(), "models/D_A/"+str(epoch)+".pth")
+        torch.save(D_B.state_dict(), "models/D_B/"+str(epoch)+".pth")
 
 
 if __name__ == "__main__":
