@@ -223,8 +223,8 @@ def main():
             return self.data_transform(img)
     mean = (0.5,)
     std = (0.5,)
-    weak_images = ImageFolder( "./data/GAN_train_weak", transform = ImageTransform(mean, std))
-    strong_images = ImageFolder( "./data/GAN_strong", transform = ImageTransform(mean, std))
+    weak_images = ImageFolder( "./data/GAN_weakest_400", transform = ImageTransform(mean, std))
+    strong_images = ImageFolder( "./data/GAN_strongest_400", transform = ImageTransform(mean, std))
     train_weak_loader = torch.utils.data.DataLoader(weak_images, batch_size=args.batch_size, shuffle=True, num_workers=0)
     train_strong_loader = torch.utils.data.DataLoader(strong_images, batch_size=args.batch_size, shuffle=True, num_workers=0)
 
