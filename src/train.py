@@ -144,7 +144,7 @@ def main():
     parser.add_argument('--lr', type=float, default=0.0002, help='learning rate')
     parser.add_argument('--pool_size', type=int, default=50, help='for discriminator: the size of image buffer that stores previously generated images')
     parser.add_argument('--lambda_cycle', type=float, default=10.0, help='Assumptive weight of cycle consistency loss')
-    parser.add_argument('--lambda_identity', type=float, default=0, help='Assumptive weight of identity mapping loss')
+    parser.add_argument('--lambda_identity', type=float, default=15.0, help='Assumptive weight of identity mapping loss')
     parser.add_argument('--gpu', '-g', type=int, default=0,
                         help='GPU ID (negative value indicates CPU)')
     #for save and load
@@ -283,11 +283,14 @@ def main():
 
             loss_cycle_A = cycle_loss(rec_A, real_A)
             loss_cycle_B = cycle_loss(rec_B, real_B)
+            loss_A_B = cycle_loss(fake_A, real_B)
+            loss_B_A = cycle_loss(fake_B, real_A)
+
 
             if args.lambda_identity>0:
                 loss_identity_A = identity_loss(iden_A,real_A)
                 loss_identity_B = identity_loss(iden_B,real_B)
-                loss_G = loss_G_A2B + loss_G_B2A + loss_cycle_A*args.lambda_cycle + loss_cycle_B*args.lambda_cycle + loss_identity_A*args.lambda_cycle*args.lambda_identity + loss_identity_B*args.lambda_cycle*args.lambda_identity
+                loss_G = loss_G_A2B + loss_G_B2A + loss_cycle_A*args.lambda_cycle + loss_cycle_B*args.lambda_cycle + loss_identity_A*args.lambda_cycle*args.lambda_identity + loss_identity_B*args.lambda_cycle*args.lambda_identity + loss_A_B*args.lambda_cycle + loss_B_A*args.lambda_cycle
 
             else:
                 loss_G = loss_G_A2B + loss_G_B2A + loss_cycle_A*args.lambda_cycle + loss_cycle_B*args.lambda_cycle
@@ -326,7 +329,7 @@ def main():
             losses[4]+=loss_D_A.item() 
             losses[5]+=loss_D_B.item()
 
-            if epoch + 1 >= 5:
+            if epoch + 1 == 100 or epoch + 1 == 200:
                 real_A.requires_grad = True
                 # データをモデルに順伝播させます
                 output_A = model(real_A)
@@ -391,7 +394,7 @@ def main():
                 # plt.yticks([], [])
                 # plt.imsave(dirname_adv + chr_lambda(init_pred.item()) + "/" + chr_lambda(init_pred.item()) + "→" + chr_lambda(final_pred.item()) + "/{}.png".format(count_list[init_pred.item()]), adv, cmap="gray")
 
-                os.makedirs("./sample/" + str(epoch + 1), exist_ok=True)
+                os.makedirs("./sample3/" + str(epoch + 1), exist_ok=True)
                 if init_pred_A.item() != label_A.item():
                     def_A = 0
                 if init_pred_B.item() != label_A.item():
@@ -408,7 +411,7 @@ def main():
                 plt.yticks([], [])
                 plt.title("{}".format(def_B))
                 plt.imshow(fake_B, cmap="gray")
-                plt.savefig("./sample/" + str(epoch + 1) + "/{}.png".format(i))
+                plt.savefig("./sample3/" + str(epoch + 1) + "/{}.png".format(i))
                       
     
             current_batch = epoch * len(train_weak_loader) + i
@@ -435,7 +438,7 @@ def main():
         scheduler_D_A.step()
         scheduler_D_B.step()
         
-        
+
         os.makedirs("models/G_A2B/", exist_ok=True)
         os.makedirs("models/G_B2A/", exist_ok=True)
         os.makedirs("models/D_A/", exist_ok=True)
